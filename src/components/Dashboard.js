@@ -1,10 +1,67 @@
 import React, { useState, useEffect } from 'react';
+import { DndContext, closestCenter } from '@dnd-kit/core';
+import { SortableContext, useSortable, rectSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import * as XLSX from 'xlsx';
 import allocateWorkers from '../services/scheduler';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import './Dashboard.css';
-import supabase from '../supabaseClient';
+import { supabase } from '../supabaseClient';
+
+// SortableItem component for each table cell
+const SortableItem = ({ id, worker, day, daySchedule, stationColor, handleChange, setFocusedFieldValue }) => {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    backgroundColor: stationColor,
+    opacity: isDragging ? 0.6 : 1,
+    border: isDragging ? '2px dashed #888' : '1px solid #ddd',
+  };
+
+  return (
+    <td
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={daySchedule.location === 'Unassigned' ? 'unassigned' : 'scheduled'}
+    >
+      <div>
+        <input
+          type="text"
+          value={daySchedule.location !== 'Unassigned' ? daySchedule.location : ''}
+          onFocus={() =>
+            setFocusedFieldValue({
+              worker,
+              day,
+              field: 'location',
+              value: daySchedule.location,
+            })
+          }
+          onChange={(e) => handleChange(worker, day, 'location', e.target.value)}
+          placeholder="Location"
+        />
+        <input
+          type="text"
+          value={daySchedule.time}
+          onFocus={() =>
+            setFocusedFieldValue({
+              worker,
+              day,
+              field: 'time',
+              value: daySchedule.time,
+            })
+          }
+          onChange={(e) => handleChange(worker, day, 'time', e.target.value)}
+          placeholder="Time"
+        />
+      </div>
+    </td>
+  );
+};
 
 const Dashboard = () => {
   const [schedule, setSchedule] = useState({});
@@ -126,7 +183,7 @@ if (stationsError) {
 }
 
 // Step 3: Map the unique dates to the corresponding days of the week
-const uniqueDates = [...new Set(stations.map(row => row.date))];
+const uniqueDates = [...new Set(stations.map(row => row.date))].sort((a, b) => new Date(a) - new Date(b));
 const newDatesOfWeek = {};
 daysOfWeek.forEach((day, index) => {
   const date = uniqueDates[index];
@@ -828,6 +885,110 @@ setUnassignedStations(unassigned);
     return { success: true, message: 'Schedule deleted successfully.' };
   };
   
+  const handleDragEnd = async (event) => {
+  console.log('Drag end event:', event);
+  const { active, over } = event;
+
+  if (!over || active.id === over.id) {
+    console.log('No valid drop:', { active, over });
+    return;
+  }
+
+  
+  try {
+    const [sourceWorker, sourceDay] = active.id.split('-');
+    const [destWorker, destDay] = over.id.split('-');
+    console.log('Source:', { sourceWorker, sourceDay }, 'Destination:', { destWorker, destDay });
+
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !session?.user) {
+      console.error('Session error:', sessionError);
+      throw new Error('User not logged in');
+    }
+
+    const userId = session.user.id;
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('organization_id, user_name')
+      .eq('id', userId)
+      .single();
+
+    if (profileError || !profile) {
+      console.error('Profile error:', profileError);
+      throw new Error('Could not fetch user profile');
+    }
+
+    const organizationId = profile.organization_id;
+    const userName = profile.user_name;
+
+    setSchedule((prevSchedule) => {
+      // Deep copy to ensure immutability
+      const updatedSchedule = JSON.parse(JSON.stringify(prevSchedule));
+      const sourceAssignment = { ...updatedSchedule[sourceWorker][sourceDay] };
+      const destAssignment = { ...updatedSchedule[destWorker][destDay] };
+
+      console.log('Before swap:', { sourceAssignment, destAssignment });
+
+      // Swap assignments
+      updatedSchedule[sourceWorker][sourceDay] = { ...destAssignment };
+      updatedSchedule[destWorker][destDay] = { ...sourceAssignment };
+
+      console.log('After swap:', updatedSchedule);
+
+      // Log audit changes
+      setAuditLogBuffer((prevLog) => {
+        const newLog = [
+          ...prevLog,
+          {
+            worker_name: sourceWorker,
+            day_of_week: sourceDay,
+            field: 'location',
+            old_value: sourceAssignment.location,
+            new_value: destAssignment.location,
+          },
+          {
+            worker_name: sourceWorker,
+            day_of_week: sourceDay,
+            field: 'time',
+            old_value: sourceAssignment.time,
+            new_value: destAssignment.time,
+          },
+          {
+            worker_name: destWorker,
+            day_of_week: destDay,
+            field: 'location',
+            old_value: destAssignment.location,
+            new_value: sourceAssignment.location,
+          },
+          {
+            worker_name: destWorker,
+            day_of_week: destDay,
+            field: 'time',
+            old_value: destAssignment.time,
+            new_value: sourceAssignment.time,
+          },
+        ];
+        console.log('Audit log buffer:', newLog);
+        return newLog;
+      });
+
+      return updatedSchedule;
+    });
+
+    // Log state after setSchedule
+    setTimeout(() => {
+      console.log('State after setSchedule:', schedule);
+    }, 0);
+
+    console.log('Calling handleSave...');
+    //await handleSave();
+    console.log('Save completed');
+  } catch (error) {
+    console.error('Drag end error:', error);
+    alert('Failed to save changes: ' + error.message);
+  } finally {
+  }
+};
 
 
   return (
@@ -997,7 +1158,7 @@ setUnassignedStations(unassigned);
           {successMessage}
         </div>
       )}
-
+      <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
       <div className="dashboard-table-wrapper">
         <table className="dashboard-table">
           <thead>
@@ -1017,58 +1178,35 @@ setUnassignedStations(unassigned);
             {Object.keys(schedule).map((worker) => (
               <tr key={worker}>
                 <td>{worker}</td>
+                <SortableContext
+                    items={daysOfWeek.map((day) => `${worker}-${day}`)}
+                    strategy={rectSortingStrategy}
+                  >
                 {daysOfWeek.map((day) => {
                   const daySchedule = schedule[worker][day];
                   const stationColor = getStationColor(daySchedule.location);
+                  const id = `${worker}-${day}`;
                   return (
-                    <td 
-                      key={day}
-                      className={daySchedule.location === 'Unassigned' ? 'unassigned' : 'scheduled'}
-                      style={{ backgroundColor: stationColor }}
-                    >
-                      <input
-  type="text"
-  value={daySchedule.location !== 'Unassigned' ? daySchedule.location : ''}
-  onFocus={() =>
-    setFocusedFieldValue({
-      worker,
-      day,
-      field: 'location',
-      value: daySchedule.location,
-    })
-  }
-  onChange={(e) =>
-    handleChange(worker, day, 'location', e.target.value)
-  }
-  placeholder="Location"
-/>
-
-<input
-  type="text"
-  value={daySchedule.time}
-  onFocus={() =>
-    setFocusedFieldValue({
-      worker,
-      day,
-      field: 'time',
-      value: daySchedule.time,
-    })
-  }
-  onChange={(e) =>
-    handleChange(worker, day, 'time', e.target.value)
-  }
-  placeholder="Time"
-/>
-
-                    </td>
-                  );
+                        <SortableItem
+                          key={id}
+                          id={id}
+                          worker={worker}
+                          day={day}
+                          daySchedule={daySchedule}
+                          stationColor={stationColor}
+                          handleChange={handleChange}
+                          setFocusedFieldValue={setFocusedFieldValue}
+                        />
+                      );
                 })}
+                </SortableContext>
                 <td>{calculateHoursWorked(schedule[worker])}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      </DndContext>
       {unassignedStations.length > 0 && (
   <div className="unassigned-section">
     <h2>🛠️ Unassigned Stations</h2>
