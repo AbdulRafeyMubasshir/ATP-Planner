@@ -10,7 +10,7 @@ import './Dashboard.css';
 import { supabase } from '../supabaseClient';
 
 // SortableItem component for each table cell
-const SortableItem = ({ id, worker, day, daySchedule, stationColor, handleChange, setFocusedFieldValue }) => {
+const SortableItem = ({ id, worker, day, daySchedule, stationColor, handleChange, setFocusedFieldValue, calculateShiftDuration }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
 
   const style = {
@@ -20,6 +20,8 @@ const SortableItem = ({ id, worker, day, daySchedule, stationColor, handleChange
     opacity: isDragging ? 0.6 : 1,
     border: isDragging ? '2px dashed #888' : '1px solid #ddd',
   };
+
+  const shiftDuration = calculateShiftDuration(daySchedule.time);
 
   return (
     <td
@@ -58,6 +60,9 @@ const SortableItem = ({ id, worker, day, daySchedule, stationColor, handleChange
           onChange={(e) => handleChange(worker, day, 'time', e.target.value)}
           placeholder="Time"
         />
+        <span className="shift-duration">
+          {daySchedule.time && shiftDuration !== '0.00' ? `${shiftDuration} hrs` : '—'}
+        </span>
       </div>
     </td>
   );
@@ -254,36 +259,65 @@ setDatesOfWeek(newDatesOfWeek);
     return colors;
   };
 
+
+  const calculateShiftDuration = (timeRange) => {
+  if (!timeRange || !timeRange.includes('-')) return '0.00';
+
+  const [start, end] = timeRange.split('-');
+  if (!start || !end) return '0.00';
+
+  const startHour = parseInt(start.slice(0, 2), 10);
+  const startMin = parseInt(start.slice(2), 10);
+  const endHour = parseInt(end.slice(0, 2), 10);
+  const endMin = parseInt(end.slice(2), 10);
+
+  let startDate = new Date(0, 0, 0, startHour, startMin);
+  let endDate = new Date(0, 0, 0, endHour, endMin);
+
+  if (endDate <= startDate) {
+    endDate = new Date(0, 0, 1, endHour, endMin); // Handle midnight crossing
+  }
+
+  const diff = (endDate - startDate) / (1000 * 60 * 60);
+  return isNaN(diff) ? '0.00' : diff.toFixed(2);
+};
+
   const calculateHoursWorked = (workerSchedule) => {
-    let totalHours = 0;
+  let totalHours = 0;
+  const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-    daysOfWeek.forEach((day) => {
-      const entry = workerSchedule[day];
-      const timeRange = entry?.time;
+  daysOfWeek.forEach((day) => {
+    const entry = workerSchedule[day];
+    const timeRange = entry?.time;
 
-      if (timeRange && timeRange.includes('-')) {
-        const [start, end] = timeRange.split('-');
+    if (timeRange && timeRange.includes('-')) {
+      const [start, end] = timeRange.split('-');
 
-        if (start && end) {
-          const startHour = parseInt(start.slice(0, 2), 10);
-          const startMin = parseInt(start.slice(2), 10);
-          const endHour = parseInt(end.slice(0, 2), 10);
-          const endMin = parseInt(end.slice(2), 10);
+      if (start && end) {
+        const startHour = parseInt(start.slice(0, 2), 10);
+        const startMin = parseInt(start.slice(2), 10);
+        const endHour = parseInt(end.slice(0, 2), 10);
+        const endMin = parseInt(end.slice(2), 10);
 
-          const startDate = new Date(0, 0, 0, startHour, startMin);
-          const endDate = new Date(0, 0, 0, endHour, endMin);
-          const diff = (endDate - startDate) / (1000 * 60 * 60);
+        let startDate = new Date(0, 0, 0, startHour, startMin);
+        let endDate = new Date(0, 0, 0, endHour, endMin);
 
-          if (!isNaN(diff)) {
-            totalHours += diff;
-          }
+        // If end time is earlier than start time, assume it crosses midnight
+        if (endDate <= startDate) {
+          endDate = new Date(0, 0, 1, endHour, endMin); // Add one day to endDate
+        }
+
+        const diff = (endDate - startDate) / (1000 * 60 * 60);
+
+        if (!isNaN(diff)) {
+          totalHours += diff;
         }
       }
-    });
+    }
+  });
 
-    return totalHours.toFixed(2);
-  };
-
+  return totalHours.toFixed(2);
+};
   const exportToExcel = () => {
     const data = [];
 
@@ -1196,6 +1230,7 @@ setUnassignedStations(unassigned);
                           stationColor={stationColor}
                           handleChange={handleChange}
                           setFocusedFieldValue={setFocusedFieldValue}
+                          calculateShiftDuration={calculateShiftDuration}
                         />
                       );
                 })}
