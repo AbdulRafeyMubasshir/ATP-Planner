@@ -8,6 +8,8 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import './Dashboard.css';
 import { supabase } from '../supabaseClient';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 
 // SortableItem component for each table cell
 const SortableItem = ({ id, worker, day, daySchedule, stationColor, handleChange, setFocusedFieldValue, calculateShiftDuration }) => {
@@ -61,7 +63,7 @@ const SortableItem = ({ id, worker, day, daySchedule, stationColor, handleChange
           placeholder="Time"
         />
         <span className="shift-duration">
-          {daySchedule.time && shiftDuration !== '0.00' ? `${shiftDuration} hrs` : '—'}
+          {daySchedule.time && shiftDuration !== '0.00' ? `${shiftDuration}` : '—'}
         </span>
       </div>
     </td>
@@ -219,31 +221,55 @@ setDatesOfWeek(newDatesOfWeek);
     return formattedSchedule;
   };
   
+  const predefinedStationColors = {
+  "LONDON BRIDGE": "#F4CCCC",
+  "CHARING CROSS": "#A64D79",
+  "WATERLOO EAST": "#00FFFF",
+  "LEWISHAM": "#F6B26B",
+  "BLACKHEATH": "#00FFFF",
+  "DARTFORD": "#6FA8DC",
+  "WOOLWICH ARSENAL": "#BDD7EE",
+  "SIDCUP": "#EA9999",
+  "SEVENOAKS": "#FFE599",
+  "OTFORD": "#EAD1DC",
+  "ASHFORD INTERNATIONAL": "#F39EFA",
+  "ASHFORD INTERNATIONAL (S)": "#E06666",
+  "TONBRIDGE": "#00B0F0",
+  "HASTINGS": "#B4A7D6",
+  "SITTINGBOURNE": "#92D050",
   
+  // Add more as needed
+};
+
 
   const assignStationColors = (formattedSchedule) => {
-    const uniqueStations = new Set();
-    
-    Object.keys(formattedSchedule).forEach((worker) => {
-      daysOfWeek.forEach((day) => {
-        const station = formattedSchedule[worker][day].location;
-        if (station && station !== 'Unassigned') {
-          uniqueStations.add(station);
-        }
-      });
-    });
+  const uniqueStations = new Set();
 
-    const generatedColors = generateUniqueColors(uniqueStations.size);
-    const newStationColors = {};
-    
-    let index = 0;
-    uniqueStations.forEach((station) => {
-      newStationColors[station] = generatedColors[index];
-      index++;
+  Object.keys(formattedSchedule).forEach((worker) => {
+    daysOfWeek.forEach((day) => {
+      const station = formattedSchedule[worker][day].location;
+      if (station && station !== 'Unassigned') {
+        uniqueStations.add(station);
+      }
     });
+  });
 
-    setStationColors(newStationColors);
-  };
+  const newStationColors = {};
+
+  uniqueStations.forEach((station) => {
+  const upperCaseStation = station.toUpperCase();
+  if (predefinedStationColors[upperCaseStation]) {
+    newStationColors[station] = predefinedStationColors[upperCaseStation];
+  } else {
+    // Optional fallback
+    newStationColors[station] = "#cccccc";
+  }
+});
+
+
+  setStationColors(newStationColors);
+};
+
 
   const generateUniqueColors = (numColors) => {
     const colors = [];
@@ -318,24 +344,256 @@ setDatesOfWeek(newDatesOfWeek);
 
   return totalHours.toFixed(2);
 };
-  const exportToExcel = () => {
-    const data = [];
+// Blend hex color with white by given opacity (0-1)
 
-    Object.keys(schedule).forEach((worker) => {
-      const row = { Worker: worker };
-      daysOfWeek.forEach((day) => {
-        const entry = schedule[worker][day];
-        row[day] = entry.location !== 'Unassigned' ? `${entry.location} (${entry.time})` : 'Unassigned';
-      });
-      row["Hours Worked"] = calculateHoursWorked(schedule[worker]);
-      data.push(row);
+const blendWithWhite = (hex, opacity) => {
+  hex = hex.replace(/^#/, '');
+  if (hex.length === 3) {
+    hex = hex.split('').map((c) => c + c).join('');
+  }
+  const r = parseInt(hex.substr(0, 2), 16);
+  const g = parseInt(hex.substr(2, 2), 16);
+  const b = parseInt(hex.substr(4, 2), 16);
+
+  const rBlended = Math.round(r + (255 - r) * opacity);
+  const gBlended = Math.round(g + (255 - g) * opacity);
+  const bBlended = Math.round(b + (255 - b) * opacity);
+
+  const toHex = (n) => n.toString(16).padStart(2, '0');
+
+  return 'FF' + toHex(rBlended) + toHex(gBlended) + toHex(bBlended);
+};
+
+const normalizeToARGB = (colorInput) => {
+  if (!colorInput) return 'FFF1F1F1';
+  let s = String(colorInput).trim();
+
+  const rgbMatch = s.match(/^rgb\((\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})\)$/i);
+  if (rgbMatch) {
+    const r = Number(rgbMatch[1]).toString(16).padStart(2, '0');
+    const g = Number(rgbMatch[2]).toString(16).padStart(2, '0');
+    const b = Number(rgbMatch[3]).toString(16).padStart(2, '0');
+    return ('FF' + r + g + b).toUpperCase();
+  }
+
+  if (s.startsWith('#')) s = s.slice(1);
+  s = s.toUpperCase();
+
+  if (s.length === 3) {
+    s = s.split('').map((c) => c + c).join('');
+  }
+
+  if (s.length === 6) return 'FF' + s;
+  if (s.length === 8) return s;
+
+  return 'FFF1F1F1';
+};
+
+const exportToExcel = async () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet('Schedule');
+
+  /** -----------------------
+ *  HEADER BLOCK / TITLE
+ * ----------------------- */
+// Merge across full table width (daysOfWeek + 2 extra cols)
+const totalCols = daysOfWeek.length + 2;
+
+// Row 1: Title
+worksheet.mergeCells(1, 1, 1, totalCols);
+const titleCell = worksheet.getCell(1, 1);
+titleCell.value = 'Temporary Worker Timesheet & Roster';
+titleCell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+titleCell.font = { bold: true, size: 16, name: 'Arial', color: { argb: 'FF000000' } };
+titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD3D3D3' } };
+titleCell.border = {
+  top: { style: 'thin', color: { argb: 'FF212121' } },
+  left: { style: 'thin', color: { argb: 'FF212121' } },
+  bottom: { style: 'thin', color: { argb: 'FF212121' } },
+  right: { style: 'thin', color: { argb: 'FF212121' } },
+};
+
+// Row 2: Empty spacer row (merged + filled, no borders)
+worksheet.addRow([]);
+worksheet.mergeCells(2, 1, 2, totalCols);
+const spacerCell = worksheet.getCell(2, 1);
+spacerCell.value = '';
+spacerCell.fill = {
+  type: 'pattern',
+  pattern: 'solid',
+  fgColor: { argb: 'FFD3D3D3' },
+};
+spacerCell.alignment = { vertical: 'middle', horizontal: 'center' };
+worksheet.getRow(2).height = 20;
+
+// Row 3: "Our Reference:" (left) | "Client:" (right)
+worksheet.mergeCells(3, 1, 3, Math.floor(totalCols / 2));
+worksheet.mergeCells(3, Math.floor(totalCols / 2) + 1, 3, totalCols);
+worksheet.getCell(3, 1).value = 'Our Reference:';
+worksheet.getCell(3, Math.floor(totalCols / 2) + 1).value = 'Client:';
+
+// Row 4: "Job Title:" (left) | "Purchase Order:" (right)
+worksheet.mergeCells(4, 1, 4, Math.floor(totalCols / 2));
+worksheet.mergeCells(4, Math.floor(totalCols / 2) + 1, 4, totalCols);
+worksheet.getCell(4, 1).value = 'Job Title:';
+worksheet.getCell(4, Math.floor(totalCols / 2) + 1).value = 'Purchase Order:';
+
+// Row 5: empty left | "Week Ending Date:" (right)
+worksheet.mergeCells(5, 1, 5, Math.floor(totalCols / 2));
+worksheet.mergeCells(5, Math.floor(totalCols / 2) + 1, 5, totalCols);
+worksheet.getCell(5, Math.floor(totalCols / 2) + 1).value = 'Week Ending Date:';
+
+// Style for rows 3–5
+for (let r = 3; r <= 5; r++) {
+  const row = worksheet.getRow(r);
+  row.height = 20;
+  row.eachCell((cell) => {
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFD3D3D3' },
+    };
+    cell.font = { bold: false, size: 12, name: 'Arial', color: { argb: 'FF000000' } };
+    cell.alignment = { vertical: 'middle', horizontal: 'left' };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FF212121' } },
+      left: { style: 'thin', color: { argb: 'FF212121' } },
+      bottom: { style: 'thin', color: { argb: 'FF212121' } },
+      right: { style: 'thin', color: { argb: 'FF212121' } },
+    };
+  });
+}
+
+
+  /** -----------------------
+   *  SCHEDULE TABLE HEADERS
+   * ----------------------- */
+  const headers = ['Day', ...daysOfWeek, '72h Limit'];
+  const datesRow = ['Date', ...daysOfWeek.map((day) => datesOfWeek[day] || '—'), 'Total Hours'];
+
+  worksheet.addRow([]);
+  worksheet.addRow(headers);
+  worksheet.addRow(datesRow);
+
+  // Adjust header styling (rows 6 and 7 now, since 1–4 are the block and 5 is empty)
+  const headerStartRow = worksheet.lastRow.number - 1;
+  [headerStartRow, headerStartRow + 1].forEach((rowNum) => {
+    const row = worksheet.getRow(rowNum);
+    row.font = { bold: true, size: 12, name: 'Arial', color: { argb: 'FF212121' } };
+    row.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    row.eachCell((cell) => {
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FF212121' } },
+        left: { style: 'thin', color: { argb: 'FF212121' } },
+        bottom: { style: 'thin', color: { argb: 'FF212121' } },
+        right: { style: 'thin', color: { argb: 'FF212121' } },
+      };
+    });
+  });
+
+  /** -----------------------
+   *  WORKER ROWS
+   * ----------------------- */
+  Object.keys(schedule).forEach((worker) => {
+    const startRow = worksheet.lastRow.number + 1;
+
+    // Time row
+    const timeRow = [worker];
+    daysOfWeek.forEach((day) => {
+      const { time } = schedule[worker][day] || {};
+      timeRow.push(time || '—');
+    });
+    timeRow.push('');
+    worksheet.addRow(timeRow);
+
+    // Location row
+    const locationRowValues = [''];
+    daysOfWeek.forEach((day) => {
+      const loc = (schedule[worker][day] && schedule[worker][day].location) || '—';
+      locationRowValues.push(loc);
+    });
+    locationRowValues.push(''); // No "72h limit" repeat here
+    const locRowRef = worksheet.addRow(locationRowValues);
+
+    daysOfWeek.forEach((day, idx) => {
+      const colIndex = idx + 2;
+      const cell = locRowRef.getCell(colIndex);
+      const locVal = locationRowValues[colIndex - 1] ?? '';
+
+      let baseColor = '#f1f1f1';
+      try {
+        if (typeof getStationColor === 'function') baseColor = getStationColor(locVal) || baseColor;
+      } catch {
+        baseColor = '#f1f1f1';
+      }
+
+      const argb = normalizeToARGB(baseColor); // Returns ARGB with full opacity
+
+
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
     });
 
-    const worksheet = XLSX.utils.json_to_sheet(data);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Schedule');
-    XLSX.writeFile(workbook, 'worker_schedule.xlsx');
-  };
+    // Hours row
+    const hoursRow = ['Hours Worked'];
+    daysOfWeek.forEach((day) => {
+      const time = schedule[worker][day] && schedule[worker][day].time;
+      const duration = calculateShiftDuration(time);
+      hoursRow.push(time && duration !== '0.00' ? `${duration}` : '—');
+    });
+    hoursRow.push(calculateHoursWorked(schedule[worker]));
+    worksheet.addRow(hoursRow);
+    // Set custom row heights for worker block
+worksheet.getRow(startRow).height = 70;       // Time row
+worksheet.getRow(startRow + 1).height = 50;   // Location row
+worksheet.getRow(startRow + 2).height = 30;   // Hours row
+
+
+    // Merge worker name cells
+    worksheet.mergeCells(`A${startRow}:A${startRow + 1}`);
+
+    // Style worker block
+    const nameCell = worksheet.getCell(`A${startRow}`);
+    nameCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD3D3D3' } };
+    nameCell.font = { bold: true, name: 'Arial', size: 11, color: { argb: 'FF212121' } };
+    nameCell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    nameCell.border = {
+      top: { style: 'thin', color: { argb: 'FF212121' } },
+      left: { style: 'thin', color: { argb: 'FF212121' } },
+      bottom: { style: 'thin', color: { argb: 'FF212121' } },
+      right: { style: 'thin', color: { argb: 'FF212121' } },
+    };
+
+    for (let r = startRow; r <= startRow + 2; r++) {
+      const row = worksheet.getRow(r);
+      row.eachCell((cell, colNum) => {
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FF212121' } },
+          left: { style: 'thin', color: { argb: 'FF212121' } },
+          bottom: { style: 'thin', color: { argb: 'FF212121' } },
+          right: { style: 'thin', color: { argb: 'FF212121' } },
+        };
+        cell.font = { name: 'Arial', size: 11, color: { argb: 'FF212121' }, bold: colNum === 1 || r === startRow + 1 };
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+      });
+    }
+
+    // Separator row
+    const separatorRow = worksheet.addRow(new Array(daysOfWeek.length + 2).fill(''));
+    separatorRow.height = 8;
+    separatorRow.eachCell({ includeEmpty: true }, (cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F4F4F' } };
+    });
+  });
+
+  worksheet.columns = [{ width: 25 }, ...daysOfWeek.map(() => ({ width: 20 })), { width: 15 }];
+
+  // Save
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  saveAs(blob, 'worker_schedule.xlsx');
+};
 
   const downloadDashboardAsPDF = () => {
     const dashboard = document.querySelector('.dashboard-container');
