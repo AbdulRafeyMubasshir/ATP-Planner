@@ -593,7 +593,7 @@ const handleUnassign = async (worker, day, daySchedule) => {
           new_value: '',
         },
       ]);
-      await handleSave();
+      //await handleSave();
     } catch (error) {
       console.error('Error unassigning shift:', error);
       alert('Failed to unassign shift: ' + error.message);
