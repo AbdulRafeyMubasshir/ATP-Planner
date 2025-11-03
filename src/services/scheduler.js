@@ -152,9 +152,9 @@ const allocateWorkers = async () => {
       const currentHours = workerTotalHours[worker.id] || 0;
       const exceedsLimit = currentHours + shiftDurationHours > 72;
 
-       // Check if worker has less than 5 shifts assigned
+       // Check if worker has less than 6 shifts assigned
       const shiftCount = workerAllocations[worker.id]?.length || 0;
-      const withinShiftLimit = shiftCount < 5;
+      const withinShiftLimit = shiftCount < 6;
 
       return isAvailable && canWorkAtLocation && isNotAllocatedForDay && hasEnoughRest && !exceedsLimit && withinShiftLimit;
     });
