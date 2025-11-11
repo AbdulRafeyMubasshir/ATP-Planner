@@ -177,6 +177,9 @@ const Workers = () => {
       friday: '',
       saturday: '',
       sunday: '',
+      email: '',
+      mobile_number: '',
+      payroll_number: '',
     });
     setShowModal(true);
   };
@@ -301,6 +304,9 @@ const Workers = () => {
             <option value="Early">Early</option>
             <option value="Late">Late</option>
             <option value="Any">Any</option>
+            <option value="N/A">N/A</option>
+            <option value="AL">AL</option>
+            <option value="Rest Day">Rest Day</option>
           </select>
         </label>
             ))}
